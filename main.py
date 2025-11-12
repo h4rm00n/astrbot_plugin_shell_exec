@@ -8,7 +8,8 @@ from astrbot.api.event import AstrMessageEvent, MessageChain, MessageEventResult
 from astrbot.api.platform import MessageType
 from astrbot.core.message.components import Plain
 from astrbot.core.star import Star
-from astrbot.core.star.register import register_command, register_permission_type, register_llm_tool
+from astrbot.api.event import filter
+from astrbot.core.star.register import register_command, register_permission_type
 from astrbot.core.star.filter.permission import PermissionType
 
 
@@ -104,15 +105,14 @@ class ShellExec(Star):
             result_type=EventResultType.CONTINUE
         )
     
-    @register_llm_tool("execute_shell_command")
+    @filter.llm_tool("execute_shell_command")
     @register_permission_type(PermissionType.ADMIN)
     async def execute_shell_command(self, event: AstrMessageEvent, command: str) -> str:
         """
         执行 shell 命令的 LLM 工具
         
         Args:
-            event: 消息事件
-            command: 要执行的 shell 命令
+            command(string): 要执行的 shell 命令
             
         Returns:
             str: 命令执行结果，如果出错则返回错误信息
