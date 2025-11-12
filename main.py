@@ -106,7 +106,7 @@ class ShellExec(Star):
     
     @register_llm_tool("execute_shell_command")
     @register_permission_type(PermissionType.ADMIN)
-    async def execute_shell_command(self, event: AstrMessageEvent, command: str) -> Optional[str]:
+    async def execute_shell_command(self, event: AstrMessageEvent, command: str) -> str:
         """
         执行 shell 命令的 LLM 工具
         
