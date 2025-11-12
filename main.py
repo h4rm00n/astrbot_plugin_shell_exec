@@ -54,6 +54,7 @@ class ShellExec(Star):
             # 执行命令
             process = await asyncio.create_subprocess_exec(
                 *args,
+                stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
