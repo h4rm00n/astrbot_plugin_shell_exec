@@ -8,19 +8,24 @@ from astrbot.api.event import AstrMessageEvent, MessageChain, MessageEventResult
 from astrbot.api.platform import MessageType
 from astrbot.core.message.components import Plain
 from astrbot.core.star import Star
+from astrbot.api.star import Context, register
+from astrbot.api import AstrBotConfig
 from astrbot.api.event import filter
-from astrbot.core.star.register import register_command, register_permission_type
 from astrbot.core.star.filter.permission import PermissionType
 
 
+@register("shell_exec", "AstrBot", "Shell 命令执行插件", "1.0.0", "https://github.com/AstrBotDevs/astrbot_plugin_shell_exec")
 class ShellExec(Star):
     """Shell 执行插件，提供命令执行功能给用户和 LLM"""
     
-    def __init__(self, context, config: dict | None = None):
-        super().__init__(context, config)
-        # 可以在这里添加配置，比如允许的命令白名单
-        self.allowed_commands = config.get("allowed_commands", []) if config else []
-        self.allow_all_commands = config.get("allow_all_commands", False) if config else False
+    def __init__(self, context: Context, config: AstrBotConfig):
+        super().__init__(context)
+        self.config = config
+        # 从配置中获取设置
+        self.allowed_commands = config.get("allowed_commands", [])
+        self.allow_all_commands = config.get("allow_all_commands", False)
+        self.max_execution_time = config.get("max_execution_time", 30)
+        self.enable_logging = config.get("enable_logging", True)
     
     async def _execute_command(self, command: str) -> tuple[str, str, int]:
         """
@@ -42,6 +47,10 @@ class ShellExec(Star):
                 if args[0] not in self.allowed_commands:
                     return "", f"错误: 命令 '{args[0]}' 不在允许的命令列表中", 1
             
+            # 记录日志（如果启用）
+            if self.enable_logging:
+                logger.info(f"执行命令: {command}")
+            
             # 执行命令
             process = await asyncio.create_subprocess_exec(
                 *args,
@@ -49,7 +58,16 @@ class ShellExec(Star):
                 stderr=asyncio.subprocess.PIPE
             )
             
-            stdout, stderr = await process.communicate()
+            # 添加超时处理
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    process.communicate(),
+                    timeout=self.max_execution_time
+                )
+            except asyncio.TimeoutError:
+                process.kill()
+                await process.wait()
+                return "", f"命令执行超时（超过 {self.max_execution_time} 秒）", 1
             
             # 解码输出
             stdout_text = stdout.decode('utf-8', errors='replace').strip()
@@ -63,22 +81,17 @@ class ShellExec(Star):
     
     @filter.command("shell")
     @filter.permission_type(filter.PermissionType.ADMIN)
-    async def shell_command(self, event: AstrMessageEvent, command: str = "") -> MessageEventResult:
+    async def shell_command(self, event: AstrMessageEvent, command: str = ""):
         """
         执行 shell 命令的用户命令
         
         Args:
             event: 消息事件
             command: 要执行的 shell 命令
-            
-        Returns:
-            MessageEventResult: 命令执行结果
         """
         if not command:
-            return MessageEventResult(
-                chain=[Plain("请提供要执行的命令。使用方法: /shell <命令>")],
-                result_type=EventResultType.CONTINUE
-            )
+            yield event.plain_result("请提供要执行的命令。使用方法: /shell <命令>")
+            return
         
         logger.info(f"管理员 {event.get_sender_id()} 请求执行命令: {command}")
         
@@ -100,10 +113,7 @@ class ShellExec(Star):
         
         response = "\n\n".join(response_parts)
         
-        return MessageEventResult(
-            chain=[Plain(response)],
-            result_type=EventResultType.CONTINUE
-        )
+        yield event.plain_result(response)
     
     @filter.llm_tool(name="execute_shell_command")
     @filter.permission_type(filter.PermissionType.ADMIN)
@@ -113,9 +123,6 @@ class ShellExec(Star):
         
         Args:
             command(string): 要执行的 shell 命令
-            
-        Returns:
-            str: 命令执行结果，如果出错则返回错误信息
         """
         logger.info(f"LLM 请求执行命令: {command}")
         
