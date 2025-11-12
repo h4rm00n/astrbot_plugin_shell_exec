@@ -4,14 +4,11 @@ import shlex
 from typing import Optional
 
 from astrbot import logger
-from astrbot.api.event import AstrMessageEvent, MessageChain, MessageEventResult, EventResultType
-from astrbot.api.platform import MessageType
-from astrbot.core.message.components import Plain
+from astrbot.api.event import AstrMessageEvent
 from astrbot.core.star import Star
 from astrbot.api.star import Context, register
 from astrbot.api import AstrBotConfig
 from astrbot.api.event import filter
-from astrbot.core.star.filter.permission import PermissionType
 
 
 @register("shell_exec", "AstrBot", "Shell 命令执行插件", "1.0.0", "https://github.com/AstrBotDevs/astrbot_plugin_shell_exec")
@@ -127,7 +124,6 @@ class ShellExec(Star):
         yield event.plain_result(response)
     
     @filter.llm_tool(name="execute_shell_command")
-    # @filter.permission_type(filter.PermissionType.ADMIN)
     async def execute_shell_command(self, event: AstrMessageEvent, command: Optional[str] = None) -> str:
         """
         执行 shell 命令的 LLM 工具
@@ -135,6 +131,11 @@ class ShellExec(Star):
         Args:
             command(string): 要执行的 shell 命令
         """
+        # 权限检查：只有管理员才能通过 LLM 执行 shell 命令
+        if event.role != "admin":
+            logger.warning(f"权限不足：用户 {event.get_sender_id()} (角色: {event.role}) 尝试通过 LLM 执行 shell 命令。")
+            return "权限验证失败：用户不是管理员，无权限使用shell命令。请联系管理员获取权限。操作已终止，无需重复尝试。"
+
         # 检查是否为框架对用户命令（如 /shell）的误调用
         if event.message_str.strip().startswith("/"):
             logger.debug(f"忽略框架对 LLM 工具的误调用，原始消息: {event.message_str.strip()}")
