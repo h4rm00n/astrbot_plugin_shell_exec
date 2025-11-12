@@ -82,14 +82,24 @@ class ShellExec(Star):
     
     @filter.command("shell")
     @filter.permission_type(filter.PermissionType.ADMIN)
-    async def shell_command(self, event: AstrMessageEvent, command: str = ""):
+    async def shell_command(self, event: AstrMessageEvent):
         """
         执行 shell 命令的用户命令
         
         Args:
             event: 消息事件
-            command: 要执行的 shell 命令
         """
+        # 从事件中获取纯文本消息并手动解析命令
+        message_text = event.message_str.strip()
+        
+        command_prefix = "/shell"
+        # 检查命令前缀，并提取后面的所有内容
+        if message_text.lower().startswith(command_prefix):
+            command = message_text[len(command_prefix):].strip()
+        else:
+            # 如果不是以 /shell 开头，理论上不应该进入这个处理器，但作为保险
+            command = ""
+
         if not command:
             yield event.plain_result("请提供要执行的命令。使用方法: /shell <命令>")
             return
