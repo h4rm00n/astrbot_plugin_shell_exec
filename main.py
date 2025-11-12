@@ -161,7 +161,11 @@ class ShellExec(Star):
             response = f"命令执行完成，返回码: {return_code}，没有输出。"
 
         # 将工具执行结果直接发送给用户，提供即时反馈
-        await event.send(MessageChain([Plain(f"LLM 工具 'execute_shell_command' 执行结果：\n{response}")]))
+        feedback_message = (
+            f"LLM 工具 'execute_shell_command' 执行了命令: `{command}`\n\n"
+            f"执行结果：\n{response}"
+        )
+        await event.send(MessageChain([Plain(feedback_message)]))
 
         # 将结果返回给 LLM
         return response
@@ -220,21 +224,23 @@ class ShellExec(Star):
             logger.warning(f"权限不足：用户 {event.get_sender_id()} (角色: {event.role}) 尝试通过 LLM 发送文件。")
             return "权限验证失败：用户不是管理员，无权限发送文件。请联系管理员获取权限。操作已终止，无需重复尝试。"
 
+        feedback_prefix = f"LLM 工具 'send_file_by_path' 尝试发送文件: `{path}`\n\n"
+
         if path is None:
             response = "参数错误: 'path' 参数是必需的。"
             logger.warning("LLM 工具 'send_file_by_path' 被调用，但缺少必需的 'path' 参数。")
-            await event.send(MessageChain([Plain(response)]))
+            await event.send(MessageChain([Plain(f"LLM 工具 'send_file_by_path' 被调用，但缺少必需的 'path' 参数。\n\n执行结果：\n{response}")]))
             return response
 
         expanded_path = os.path.expanduser(path)
         if not os.path.exists(expanded_path):
             response = f"文件未找到: {expanded_path}"
-            await event.send(MessageChain([Plain(response)]))
+            await event.send(MessageChain([Plain(f"{feedback_prefix}执行结果：\n{response}")]))
             return response
         
         if not os.path.isfile(expanded_path):
             response = f"路径不是一个文件: {expanded_path}"
-            await event.send(MessageChain([Plain(response)]))
+            await event.send(MessageChain([Plain(f"{feedback_prefix}执行结果：\n{response}")]))
             return response
 
         try:
@@ -243,10 +249,10 @@ class ShellExec(Star):
             await event.send(MessageChain([file_component]))
             
             response = f"文件 '{os.path.basename(expanded_path)}' 已成功发送。"
-            await event.send(MessageChain([Plain(response)]))
+            # 只需要返回成功信息即可，因为文件已经发送了
             return response
         except Exception as e:
             response = f"发送文件时出错: {e}"
             logger.error(f"LLM 工具发送文件时出错: {e}")
-            await event.send(MessageChain([Plain(response)]))
+            await event.send(MessageChain([Plain(f"{feedback_prefix}执行结果：\n{response}")]))
             return response
