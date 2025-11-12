@@ -82,31 +82,31 @@ class ShellExec(Star):
     
     @filter.command("shell")
     @filter.permission_type(filter.PermissionType.ADMIN)
-    async def shell_command(self, event: AstrMessageEvent):
+    async def shell_command(self, event: AstrMessageEvent, command: str = ""):
         """
         执行 shell 命令的用户命令
         
         Args:
             event: 消息事件
+            command: 要执行的 shell 命令 (由框架注入，可能不完整)
         """
-        # 从事件中获取纯文本消息并手动解析命令
+        # 框架注入的 command 参数不可靠，我们从原始消息中手动解析
         message_text = event.message_str.strip()
         
-        command_prefix = "/shell"
-        # 检查命令前缀，并提取后面的所有内容
-        if message_text.lower().startswith(command_prefix):
-            command = message_text[len(command_prefix):].strip()
+        # 找到 /shell 之后的所有内容
+        parts = message_text.split(" ", 1)
+        if len(parts) > 1:
+            actual_command = parts[1].strip()
         else:
-            # 如果不是以 /shell 开头，理论上不应该进入这个处理器，但作为保险
-            command = ""
+            actual_command = ""
 
-        if not command:
+        if not actual_command:
             yield event.plain_result("请提供要执行的命令。使用方法: /shell <命令>")
             return
         
-        logger.info(f"管理员 {event.get_sender_id()} 请求执行命令: {command}")
+        logger.info(f"管理员 {event.get_sender_id()} 请求执行命令: {actual_command}")
         
-        stdout, stderr, return_code = await self._execute_command(command)
+        stdout, stderr, return_code = await self._execute_command(actual_command)
         
         # 构建响应消息
         response_parts = []
@@ -128,7 +128,7 @@ class ShellExec(Star):
     
     @filter.llm_tool(name="execute_shell_command")
     @filter.permission_type(filter.PermissionType.ADMIN)
-    async def execute_shell_command(self, command: str) -> str:
+    async def execute_shell_command(self, event: AstrMessageEvent, command: str) -> str:
         """
         执行 shell 命令的 LLM 工具
         
