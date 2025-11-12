@@ -3,11 +3,11 @@ import os
 import shlex
 from typing import Optional
 
-from astrbot import logger
+from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, MessageChain, MessageEventResult, EventResultType
 from astrbot.api.platform import MessageType
-from astrbot.core.message.components import File, Plain
-from astrbot.core.star import Star
+from astrbot.api.message_components import File, Plain
+from astrbot.api.star import Star
 from astrbot.api.star import Context, register
 from astrbot.api import AstrBotConfig
 from astrbot.api.event import filter
@@ -89,23 +89,13 @@ class ShellExec(Star):
             event: 消息事件
             command: 要执行的 shell 命令 (由框架注入，可能不完整)
         """
-        # 框架注入的 command 参数不可靠，我们从原始消息中手动解析
-        message_text = event.message_str.strip()
-        
-        # 找到 /shell 之后的所有内容
-        parts = message_text.split(" ", 1)
-        if len(parts) > 1:
-            actual_command = parts[1].strip()
-        else:
-            actual_command = ""
-
-        if not actual_command:
+        if not command:
             yield event.plain_result("请提供要执行的命令。使用方法: /shell <命令>")
             return
         
-        logger.info(f"管理员 {event.get_sender_id()} 请求执行命令: {actual_command}")
+        logger.info(f"管理员 {event.get_sender_id()} 请求执行命令: {command}")
         
-        stdout, stderr, return_code = await self._execute_command(actual_command)
+        stdout, stderr, return_code = await self._execute_command(command)
         
         # 构建响应消息
         response_parts = []
@@ -180,19 +170,11 @@ class ShellExec(Star):
             event: 消息事件
             path: 要发送的文件路径 (由框架注入，可能不完整)
         """
-        message_text = event.message_str.strip()
-        
-        parts = message_text.split(" ", 1)
-        if len(parts) > 1:
-            actual_path = parts[1].strip()
-        else:
-            actual_path = ""
-
-        if not actual_path:
+        if not path:
             yield event.plain_result("请提供要发送的文件路径。使用方法: /send_file <路径>")
             return
         
-        expanded_path = os.path.expanduser(actual_path)
+        expanded_path = os.path.expanduser(path)
 
         if not os.path.exists(expanded_path):
             yield event.plain_result(f"文件未找到: {expanded_path}")
