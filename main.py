@@ -39,7 +39,8 @@ class ShellExec(Star):
         """
         try:
             # 使用 shlex.split 来正确处理带引号的参数
-            args = shlex.split(command)
+            # 使用 shlex.split 来正确处理带引号的参数，并展开用户目录（~）
+            args = [os.path.expanduser(arg) for arg in shlex.split(command)]
             
             # 安全检查：如果配置了命令白名单且不允许所有命令
             if not self.allow_all_commands and self.allowed_commands:
@@ -117,7 +118,7 @@ class ShellExec(Star):
     
     @filter.llm_tool(name="execute_shell_command")
     @filter.permission_type(filter.PermissionType.ADMIN)
-    async def execute_shell_command(self, event: AstrMessageEvent, command: str) -> str:
+    async def execute_shell_command(self, command: str) -> str:
         """
         执行 shell 命令的 LLM 工具
         
