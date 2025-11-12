@@ -81,7 +81,7 @@ class ShellExec(Star):
             return "", f"执行命令时出错: {str(e)}", 1
     
     @filter.command("shell")
-    # @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.permission_type(filter.PermissionType.ADMIN)
     async def shell_command(self, event: AstrMessageEvent, command: str = ""):
         """
         执行 shell 命令的用户命令
