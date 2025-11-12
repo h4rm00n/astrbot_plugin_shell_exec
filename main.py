@@ -61,8 +61,8 @@ class ShellExec(Star):
             logger.error(f"执行命令时出错: {str(e)}")
             return "", f"执行命令时出错: {str(e)}", 1
     
-    @register_command("shell")
-    @register_permission_type(PermissionType.ADMIN)
+    @filter.command("shell")
+    @filter.permission_type(filter.PermissionType.ADMIN)
     async def shell_command(self, event: AstrMessageEvent, command: str = "") -> MessageEventResult:
         """
         执行 shell 命令的用户命令
@@ -105,8 +105,8 @@ class ShellExec(Star):
             result_type=EventResultType.CONTINUE
         )
     
-    @filter.llm_tool("execute_shell_command")
-    @register_permission_type(PermissionType.ADMIN)
+    @filter.llm_tool(name="execute_shell_command")
+    @filter.permission_type(filter.PermissionType.ADMIN)
     async def execute_shell_command(self, event: AstrMessageEvent, command: str) -> str:
         """
         执行 shell 命令的 LLM 工具
