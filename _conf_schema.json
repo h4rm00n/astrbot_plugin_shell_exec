@@ -31,24 +31,6 @@
       "whereis"
     ]
   },
-  "interactive_commands": {
-    "description": "可能进入交互模式的命令列表",
-    "type": "list",
-    "hint": "当这些命令在没有附加参数的情况下被调用时，执行将被阻止，以防止堵塞。",
-    "default": [
-      "bash",
-      "sh",
-      "zsh",
-      "fish",
-      "python",
-      "python3",
-      "node",
-      "irb",
-      "ruby",
-      "php",
-      "perl"
-    ]
-  },
   "max_execution_time": {
     "description": "命令执行超时时间（秒）",
     "type": "int",

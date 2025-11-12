@@ -25,7 +25,6 @@ class ShellExec(Star):
         self.allow_all_commands = config.get("allow_all_commands", False)
         self.max_execution_time = config.get("max_execution_time", 30)
         self.enable_logging = config.get("enable_logging", True)
-        self.interactive_commands = config.get("interactive_commands", [])
     
     async def _execute_command(self, command: str) -> tuple[str, str, int]:
         """
@@ -42,10 +41,6 @@ class ShellExec(Star):
             # 使用 shlex.split 来正确处理带引号的参数，并展开用户目录（~）
             args = [os.path.expanduser(arg) for arg in shlex.split(command)]
             
-            # 交互式命令检查
-            if args[0] in self.interactive_commands and len(args) == 1:
-                return "", f"错误: 直接执行 '{args[0]}' 会启动一个交互式会话并导致堵塞。请提供参数（例如，'{args[0]} -c \"...\"'）或要执行的脚本。", 1
-
             # 安全检查：如果配置了命令白名单且不允许所有命令
             if not self.allow_all_commands and self.allowed_commands:
                 # 检查命令是否在白名单中
