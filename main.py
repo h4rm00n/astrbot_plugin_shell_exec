@@ -128,13 +128,17 @@ class ShellExec(Star):
     
     @filter.llm_tool(name="execute_shell_command")
     @filter.permission_type(filter.PermissionType.ADMIN)
-    async def execute_shell_command(self, event: AstrMessageEvent, command: str) -> str:
+    async def execute_shell_command(self, event: AstrMessageEvent, command: Optional[str] = None) -> str:
         """
         执行 shell 命令的 LLM 工具
         
         Args:
             command(string): 要执行的 shell 命令
         """
+        if command is None:
+            logger.warning("execute_shell_command 在没有 'command' 参数的情况下被调用。")
+            return ""
+            
         logger.info(f"LLM 请求执行命令: {command}")
         
         stdout, stderr, return_code = await self._execute_command(command)
