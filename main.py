@@ -4,7 +4,9 @@ import shlex
 from typing import Optional
 
 from astrbot import logger
-from astrbot.api.event import AstrMessageEvent
+from astrbot.api.event import AstrMessageEvent, MessageChain, MessageEventResult, EventResultType
+from astrbot.api.platform import MessageType
+from astrbot.core.message.components import File, Plain
 from astrbot.core.star import Star
 from astrbot.api.star import Context, register
 from astrbot.api import AstrBotConfig
@@ -156,3 +158,80 @@ class ShellExec(Star):
             return f"命令执行失败，返回码: {return_code}\n错误信息:\n{stderr}"
         else:
             return f"命令执行完成，返回码: {return_code}，没有输出。"
+
+    @filter.command("send_file")
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    async def send_file_command(self, event: AstrMessageEvent, path: str = ""):
+        """
+        根据路径发送文件的用户命令
+        
+        Args:
+            event: 消息事件
+            path: 要发送的文件路径 (由框架注入，可能不完整)
+        """
+        message_text = event.message_str.strip()
+        
+        parts = message_text.split(" ", 1)
+        if len(parts) > 1:
+            actual_path = parts[1].strip()
+        else:
+            actual_path = ""
+
+        if not actual_path:
+            yield event.plain_result("请提供要发送的文件路径。使用方法: /send_file <路径>")
+            return
+        
+        expanded_path = os.path.expanduser(actual_path)
+
+        if not os.path.exists(expanded_path):
+            yield event.plain_result(f"文件未找到: {expanded_path}")
+            return
+        
+        if not os.path.isfile(expanded_path):
+            yield event.plain_result(f"路径不是一个文件: {expanded_path}")
+            return
+
+        logger.info(f"管理员 {event.get_sender_id()} 请求发送文件: {expanded_path}")
+        
+        try:
+            file_component = File(name=os.path.basename(expanded_path), file=expanded_path)
+            yield event.chain_result([file_component])
+        except Exception as e:
+            logger.error(f"发送文件时出错: {e}")
+            yield event.plain_result(f"发送文件时出错: {e}")
+
+    @filter.llm_tool(name="send_file_by_path")
+    async def send_file_by_path(self, event: AstrMessageEvent, path: Optional[str] = None) -> str:
+        """
+        根据路径发送文件的 LLM 工具
+        
+        Args:
+            path(string): 要发送的文件的绝对或相对路径
+        """
+        # 权限检查
+        if event.role != "admin":
+            logger.warning(f"权限不足：用户 {event.get_sender_id()} (角色: {event.role}) 尝试通过 LLM 发送文件。")
+            return "权限验证失败：用户不是管理员，无权限发送文件。请联系管理员获取权限。操作已终止，无需重复尝试。"
+
+        if path is None:
+            logger.warning("LLM 工具 'send_file_by_path' 被调用，但缺少必需的 'path' 参数。")
+            return "参数错误: 'path' 参数是必需的。"
+            
+        logger.info(f"LLM 请求发送文件: {path}")
+        
+        expanded_path = os.path.expanduser(path)
+
+        if not os.path.exists(expanded_path):
+            return f"文件未找到: {expanded_path}"
+        
+        if not os.path.isfile(expanded_path):
+            return f"路径不是一个文件: {expanded_path}"
+
+        try:
+            file_component = File(name=os.path.basename(expanded_path), file=expanded_path)
+            # LLM tool needs to send the message itself.
+            await event.send(MessageChain([file_component]))
+            return f"文件 '{os.path.basename(expanded_path)}' 已成功发送。"
+        except Exception as e:
+            logger.error(f"LLM 工具发送文件时出错: {e}")
+            return f"发送文件时出错: {e}"
