@@ -1,0 +1,27 @@
+# Shell 执行插件配置示例
+# 将此文件重命名为 config.yaml 并放置在插件目录下
+
+# 是否允许执行所有命令（默认为 false，建议保持 false 以确保安全）
+allow_all_commands: false
+
+# 允许执行的命令白名单（仅在 allow_all_commands 为 false 时生效）
+# 留空表示不允许执行任何命令
+allowed_commands:
+  - "ls"
+  - "pwd"
+  - "whoami"
+  - "date"
+  - "uptime"
+  - "df"
+  - "free"
+  - "ps"
+  - "cat"
+  - "grep"
+  - "tail"
+  - "head"
+  - "wc"
+  - "find"
+  - "echo"
+  - "uname"
+  - "which"
+  - "whereis"
