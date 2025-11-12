@@ -81,7 +81,7 @@ class ShellExec(Star):
             return "", f"执行命令时出错: {str(e)}", 1
     
     @filter.command("shell")
-    @filter.permission_type(filter.PermissionType.ADMIN)
+    # @filter.permission_type(filter.PermissionType.ADMIN)
     async def shell_command(self, event: AstrMessageEvent, command: str = ""):
         """
         执行 shell 命令的用户命令
@@ -127,7 +127,7 @@ class ShellExec(Star):
         yield event.plain_result(response)
     
     @filter.llm_tool(name="execute_shell_command")
-    @filter.permission_type(filter.PermissionType.ADMIN)
+    # @filter.permission_type(filter.PermissionType.ADMIN)
     async def execute_shell_command(self, event: AstrMessageEvent, command: Optional[str] = None) -> str:
         """
         执行 shell 命令的 LLM 工具
@@ -135,8 +135,13 @@ class ShellExec(Star):
         Args:
             command(string): 要执行的 shell 命令
         """
+        # 检查是否为框架对用户命令（如 /shell）的误调用
+        if event.message_str.strip().startswith("/"):
+            logger.debug(f"忽略框架对 LLM 工具的误调用，原始消息: {event.message_str.strip()}")
+            return ""
+        
         if command is None:
-            logger.warning("execute_shell_command 在没有 'command' 参数的情况下被调用。")
+            logger.warning("LLM 工具 'execute_shell_command' 被调用，但缺少必需的 'command' 参数。")
             return ""
             
         logger.info(f"LLM 请求执行命令: {command}")
