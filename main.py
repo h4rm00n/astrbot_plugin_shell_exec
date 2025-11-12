@@ -21,8 +21,6 @@ class ShellExec(Star):
         super().__init__(context)
         self.config = config
         # 从配置中获取设置
-        self.allowed_commands = config.get("allowed_commands", [])
-        self.allow_all_commands = config.get("allow_all_commands", False)
         self.max_execution_time = config.get("max_execution_time", 30)
         self.enable_logging = config.get("enable_logging", True)
     
@@ -37,23 +35,19 @@ class ShellExec(Star):
             tuple: (stdout, stderr, return_code)
         """
         try:
-            # 使用 shlex.split 来正确处理带引号的参数
-            # 使用 shlex.split 来正确处理带引号的参数，并展开用户目录（~）
-            args = [os.path.expanduser(arg) for arg in shlex.split(command)]
-            
-            # 安全检查：如果配置了命令白名单且不允许所有命令
-            if not self.allow_all_commands and self.allowed_commands:
-                # 检查命令是否在白名单中
-                if args[0] not in self.allowed_commands:
-                    return "", f"错误: 命令 '{args[0]}' 不在允许的命令列表中", 1
-            
+            # 安全警告: 为了支持管道(|)和重定向(>)等shell特性，我们使用`create_subprocess_shell`。
+            # 这意味着命令将由系统的shell（如/bin/sh）直接解释。
+            # 虽然这提供了强大的功能，但也带来了安全风险，因为可以链式执行命令（例如 `cmd1; cmd2`）。
+            # 因此，插件的安全性现在完全依赖于调用者的权限检查（例如，仅限管理员）。
+            # 原有的`allowed_commands`白名单机制在shell模式下几乎无效，因此已被移除。
+
             # 记录日志（如果启用）
             if self.enable_logging:
-                logger.info(f"执行命令: {command}")
-            
-            # 执行命令
-            process = await asyncio.create_subprocess_exec(
-                *args,
+                logger.info(f"在shell中执行命令: {command}")
+
+            # 使用 shell 执行命令
+            process = await asyncio.create_subprocess_shell(
+                command,
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
