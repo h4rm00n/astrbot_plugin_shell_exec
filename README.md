@@ -82,4 +82,4 @@ enable_logging: true
 
 ## 许可证
 
-本插件遵循 MIT 许可证。
+本插件遵循 Apache 2.0 许可证。
