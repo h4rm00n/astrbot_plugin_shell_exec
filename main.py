@@ -26,6 +26,14 @@ class ShellExec(Star):
         # 从配置中获取设置
         self.max_execution_time = config.get("max_execution_time", 30)
         self.enable_logging = config.get("enable_logging", True)
+        
+        # 设置工作目录
+        plugin_dir = os.path.dirname(os.path.abspath(__file__))
+        default_cwd = os.path.join(plugin_dir, "workdir")
+        self.working_directory = config.get("working_directory") or default_cwd
+        
+        # 确保工作目录存在
+        os.makedirs(self.working_directory, exist_ok=True)
     
     async def _execute_command(self, command: str) -> tuple[str, str, int]:
         """
@@ -51,6 +59,7 @@ class ShellExec(Star):
             # 使用 shell 执行命令
             process = await asyncio.create_subprocess_shell(
                 command,
+                cwd=self.working_directory,
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
@@ -276,7 +285,7 @@ class ShellExec(Star):
             await event.send(MessageChain([Plain(f"LLM 工具 'send_file_by_url' 被调用，但缺少必需的 'url' 参数。\n\n执行结果：\n{response}")]))
             return response
 
-        temp_dir = tempfile.gettempdir()
+        temp_dir = self.working_directory
         
         # 从 URL 中提取文件名，如果无法提取则生成一个
         try:

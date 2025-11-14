@@ -10,5 +10,11 @@
     "type": "bool", 
     "hint": "是否记录所有执行的命令到日志文件中。",
     "default": true
+  },
+  "working_directory": {
+    "description": "插件的工作目录",
+    "type": "str",
+    "hint": "所有 shell 命令将在此目录中执行，并且 URL 下载的临时文件也将存储在此处。如果留空，将默认使用插件目录下的 'workdir' 文件夹。",
+    "default": ""
   }
 }
