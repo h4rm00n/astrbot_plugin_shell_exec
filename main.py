@@ -2,6 +2,9 @@ import asyncio
 import os
 import shlex
 from typing import Optional
+import aiohttp
+import uuid
+import tempfile
 
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, MessageChain, MessageEventResult, EventResultType
@@ -209,10 +212,10 @@ class ShellExec(Star):
     @filter.llm_tool(name="send_file_by_path")
     async def send_file_by_path(self, event: AstrMessageEvent, path: Optional[str] = None) -> str:
         """
-        根据路径发送文件的 LLM 工具
+        根据本地路径发送文件的 LLM 工具
         
         Args:
-            path(string): 要发送的文件的绝对或相对路径
+            path(string): 要发送的文件的绝对或相对本地路径
         """
         # 权限检查
         if event.role != "admin":
@@ -251,3 +254,70 @@ class ShellExec(Star):
             logger.error(f"LLM 工具发送文件时出错: {e}")
             await event.send(MessageChain([Plain(f"{feedback_prefix}执行结果：\n{response}")]))
             return response
+
+    @filter.llm_tool(name="send_file_by_url")
+    async def send_file_by_url(self, event: AstrMessageEvent, url: Optional[str] = None) -> str:
+        """
+        根据 URL 发送文件的 LLM 工具，例如在线图片。
+
+        Args:
+            url(string): 要发送的文件的 URL
+        """
+        # 权限检查
+        if event.role != "admin":
+            logger.warning(f"权限不足：用户 {event.get_sender_id()} (角色: {event.role}) 尝试通过 LLM 发送文件。")
+            return "权限验证失败：用户不是管理员，无权限发送文件。请联系管理员获取权限。操作已终止，无需重复尝试。"
+
+        feedback_prefix = f"LLM 工具 'send_file_by_url' 尝试发送文件: `{url}`\n\n"
+
+        if url is None:
+            response = "参数错误: 'url' 参数是必需的。"
+            logger.warning("LLM 工具 'send_file_by_url' 被调用，但缺少必需的 'url' 参数。")
+            await event.send(MessageChain([Plain(f"LLM 工具 'send_file_by_url' 被调用，但缺少必需的 'url' 参数。\n\n执行结果：\n{response}")]))
+            return response
+
+        temp_dir = tempfile.gettempdir()
+        
+        # 从 URL 中提取文件名，如果无法提取则生成一个
+        try:
+            file_name = os.path.basename(url.split("?")[0])
+            if not file_name:
+                file_name = str(uuid.uuid4())
+        except Exception:
+            file_name = str(uuid.uuid4())
+
+        temp_file_path = os.path.join(temp_dir, file_name)
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url) as resp:
+                    if resp.status != 200:
+                        response = f"下载文件失败，HTTP 状态码: {resp.status}"
+                        await event.send(MessageChain([Plain(f"{feedback_prefix}执行结果：\n{response}")]))
+                        return response
+                    
+                    with open(temp_file_path, 'wb') as f:
+                        while True:
+                            chunk = await resp.content.read(1024)
+                            if not chunk:
+                                break
+                            f.write(chunk)
+
+            logger.info(f"LLM 请求发送 URL 文件: {url}")
+            file_component = File(name=file_name, file=temp_file_path)
+            await event.send(MessageChain([file_component]))
+            
+            response = f"文件 '{file_name}' 已从 URL 成功发送。"
+            return response
+        except Exception as e:
+            response = f"从 URL 发送文件时出错: {e}"
+            logger.error(f"LLM 工具从 URL 发送文件时出错: {e}")
+            await event.send(MessageChain([Plain(f"{feedback_prefix}执行结果：\n{response}")]))
+            return response
+        finally:
+            # 可选：发送后删除临时文件
+            if os.path.exists(temp_file_path):
+                try:
+                    os.remove(temp_file_path)
+                except Exception as e:
+                    logger.warning(f"删除临时文件失败: {temp_file_path}, 错误: {e}")
