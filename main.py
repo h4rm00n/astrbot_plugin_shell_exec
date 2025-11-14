@@ -16,7 +16,7 @@ from astrbot.api import AstrBotConfig
 from astrbot.api.event import filter
 
 
-@register("shell_exec", "AstrBot", "Shell 命令执行插件", "1.0.0", "https://github.com/AstrBotDevs/astrbot_plugin_shell_exec")
+# @register("shell_exec", "AstrBot", "Shell 命令执行插件", "1.0.0", "https://github.com/AstrBotDevs/astrbot_plugin_shell_exec")
 class ShellExec(Star):
     """Shell 执行插件，提供命令执行功能给用户和 LLM"""
     
