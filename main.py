@@ -159,13 +159,22 @@ class ShellExec(Star):
         stdout, stderr, return_code = await self._execute_command(command)
         
         # 构建响应
-        response = ""
-        if stdout and not stderr:
-            response = f"命令执行成功，返回码: {return_code}\n输出:\n{stdout}"
-        elif stderr:
-            response = f"命令执行失败，返回码: {return_code}\n错误信息:\n{stderr}"
+        if return_code == 0:
+            response = f"命令执行成功，返回码: {return_code}"
+            if stdout:
+                response += f"\n输出:\n{stdout}"
+            if stderr:
+                response += f"\n标准错误输出 (通常用于状态或诊断信息):\n{stderr}"
+            if not stdout and not stderr:
+                response += "，没有输出。"
         else:
-            response = f"命令执行完成，返回码: {return_code}，没有输出。"
+            response = f"命令执行失败，返回码: {return_code}"
+            if stderr:
+                response += f"\n错误信息:\n{stderr}"
+            if stdout:
+                response += f"\n输出 (可能相关):\n{stdout}"
+            if not stdout and not stderr:
+                response += "，没有输出。"
 
         # 将工具执行结果直接发送给用户，提供即时反馈
         feedback_message = (
