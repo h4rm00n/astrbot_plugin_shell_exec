@@ -3,6 +3,7 @@ import os
 import shlex
 import re
 import time
+import json
 from typing import Optional, Tuple, Dict
 from dataclasses import dataclass
 import aiohttp
@@ -24,6 +25,7 @@ class PendingCommand:
     timestamp: float
     reason: str
     source: str  # 'user' or 'llm'
+    umo: str = ""  # 记录原始会话 ID
 
 # @register("shell_exec", "AstrBot", "Shell 命令执行插件", "1.1.0", "https://github.com/h4rm00n/astrbot_plugin_shell_exec")
 class ShellExec(Star):
@@ -212,7 +214,17 @@ class ShellExec(Star):
         # 如果命令源自 LLM，则主动通知 LLM 结果
         if pending.source == 'llm':
             try:
-                chat_provider_id = await self.context.get_current_chat_provider_id(event.unified_msg_origin)
+                target_umo = pending.umo if pending.umo else event.unified_msg_origin
+                chat_provider_id = await self.context.get_current_chat_provider_id(target_umo)
+                
+                # 获取原始对话上下文
+                history = []
+                curr_cid = await self.context.conversation_manager.get_curr_conversation_id(target_umo)
+                if curr_cid:
+                    conv = await self.context.conversation_manager.get_conversation(target_umo, curr_cid)
+                    if conv and conv.history:
+                        history = json.loads(conv.history)
+                
                 notification_prompt = (
                     f"管理员已批准执行你之前请求的敏感命令：`{pending.command}`。\n\n"
                     f"执行结果如下：\n{result_text}\n\n"
@@ -221,11 +233,23 @@ class ShellExec(Star):
                 llm_response = await self.context.tool_loop_agent(
                     event=event,
                     chat_provider_id=chat_provider_id,
-                    prompt=notification_prompt
+                    prompt=notification_prompt,
+                    contexts=history,
+                    tools=self.context.get_llm_tool_manager().get_full_tool_set()
                 )
                 # 将 LLM 的回应发送给用户
                 if llm_response and llm_response.completion_text:
                     await event.send(MessageChain([Plain(llm_response.completion_text)]))
+                    
+                    # 将这次交互写回对话历史，确保后续对话能感知
+                    if curr_cid:
+                        user_msg = {"role": "user", "content": notification_prompt}
+                        assistant_msg = {"role": "assistant", "content": llm_response.completion_text}
+                        await self.context.conversation_manager.add_message_pair(
+                            cid=curr_cid,
+                            user_message=user_msg,
+                            assistant_message=assistant_msg
+                        )
             except Exception as e:
                 logger.error(f"尝试通知 LLM 失败: {e}")
 
@@ -241,7 +265,17 @@ class ShellExec(Star):
             # 如果是 LLM 命令，通知 LLM 被拒绝了
             if pending.source == 'llm':
                 try:
-                    chat_provider_id = await self.context.get_current_chat_provider_id(event.unified_msg_origin)
+                    target_umo = pending.umo if pending.umo else event.unified_msg_origin
+                    chat_provider_id = await self.context.get_current_chat_provider_id(target_umo)
+                    
+                    # 获取原始对话上下文
+                    history = []
+                    curr_cid = await self.context.conversation_manager.get_curr_conversation_id(target_umo)
+                    if curr_cid:
+                        conv = await self.context.conversation_manager.get_conversation(target_umo, curr_cid)
+                        if conv and conv.history:
+                            history = json.loads(conv.history)
+
                     notification_prompt = (
                         f"管理员**拒绝**了你之前请求的敏感命令：`{pending.command}`。\n\n"
                         "请知晓此情况，并向用户解释该操作由于安全策略被管理员拦截。"
@@ -249,10 +283,22 @@ class ShellExec(Star):
                     llm_response = await self.context.tool_loop_agent(
                         event=event,
                         chat_provider_id=chat_provider_id,
-                        prompt=notification_prompt
+                        prompt=notification_prompt,
+                        contexts=history,
+                        tools=self.context.get_llm_tool_manager().get_full_tool_set()
                     )
                     if llm_response and llm_response.completion_text:
                         await event.send(MessageChain([Plain(llm_response.completion_text)]))
+                        
+                        # 将这次交互写回对话历史，确保后续对话能感知
+                        if curr_cid:
+                            user_msg = {"role": "user", "content": notification_prompt}
+                            assistant_msg = {"role": "assistant", "content": llm_response.completion_text}
+                            await self.context.conversation_manager.add_message_pair(
+                                cid=curr_cid,
+                                user_message=user_msg,
+                                assistant_message=assistant_msg
+                            )
                 except Exception as e:
                     logger.error(f"尝试通知 LLM 失败: {e}")
         else:
@@ -299,7 +345,8 @@ class ShellExec(Star):
                         command=command,
                         timestamp=time.time(),
                         reason=reason,
-                        source='llm'
+                        source='llm',
+                        umo=event.unified_msg_origin
                     )
                     notice = (
                         f"🤖 LLM 尝试执行可能存在风险的指令：\n`{command}`\n\n"
