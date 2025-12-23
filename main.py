@@ -1,7 +1,10 @@
 import asyncio
 import os
 import shlex
-from typing import Optional
+import re
+import time
+from typing import Optional, Tuple, Dict
+from dataclasses import dataclass
 import aiohttp
 import uuid
 import tempfile
@@ -15,10 +18,16 @@ from astrbot.api.star import Context, register
 from astrbot.api import AstrBotConfig
 from astrbot.api.event import filter
 
+@dataclass
+class PendingCommand:
+    command: str
+    timestamp: float
+    reason: str
+    source: str  # 'user' or 'llm'
 
-# @register("shell_exec", "AstrBot", "Shell 命令执行插件", "1.0.0", "https://github.com/AstrBotDevs/astrbot_plugin_shell_exec")
+# @register("shell_exec", "AstrBot", "Shell 命令执行插件", "1.1.0", "https://github.com/h4rm00n/astrbot_plugin_shell_exec")
 class ShellExec(Star):
-    """Shell 执行插件，提供命令执行功能给用户和 LLM"""
+    """Shell 执行插件，提供命令执行功能给用户和 LLM，具备三级安全审计和确认状态机"""
     
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -27,6 +36,18 @@ class ShellExec(Star):
         self.max_execution_time = config.get("max_execution_time", 30)
         self.enable_logging = config.get("enable_logging", True)
         
+        # 安全等级：用户指令 vs LLM 指令
+        self.user_security_level = config.get("user_security_level", "permissive")
+        self.llm_security_level = config.get("llm_security_level", "verification")
+        
+        self.security_blacklist = config.get("security_blacklist", ["rm", "mkfs", "format", "shutdown", "reboot", "chmod 777", "> /dev", "mv /*"])
+        self.enable_llm_audit = config.get("enable_llm_audit", True)
+        
+        # 待确认命令缓存 {user_id: PendingCommand}
+        self.pending_states: Dict[str, PendingCommand] = {}
+        # 确认有效期（秒），超时后自动失效
+        self.confirmation_timeout = 300 
+        
         # 设置工作目录
         plugin_dir = os.path.dirname(os.path.abspath(__file__))
         default_cwd = os.path.join(plugin_dir, "workdir")
@@ -34,29 +55,51 @@ class ShellExec(Star):
         
         # 确保工作目录存在
         os.makedirs(self.working_directory, exist_ok=True)
-    
-    async def _execute_command(self, command: str) -> tuple[str, str, int]:
-        """
-        执行 shell 命令的核心方法
-        
-        Args:
-            command: 要执行的 shell 命令
-            
-        Returns:
-            tuple: (stdout, stderr, return_code)
-        """
-        try:
-            # 安全警告: 为了支持管道(|)和重定向(>)等shell特性，我们使用`create_subprocess_shell`。
-            # 这意味着命令将由系统的shell（如/bin/sh）直接解释。
-            # 虽然这提供了强大的功能，但也带来了安全风险，因为可以链式执行命令（例如 `cmd1; cmd2`）。
-            # 因此，插件的安全性现在完全依赖于调用者的权限检查（例如，仅限管理员）。
-            # 原有的`allowed_commands`白名单机制在shell模式下几乎无效，因此已被移除。
 
-            # 记录日志（如果启用）
+    async def _check_security(self, command: str, current_level: str, umo: Optional[str] = None) -> Tuple[bool, str]:
+        """
+        检查命令安全性
+        Returns: (is_safe, reason)
+        """
+        # 1. 本地黑名单检查
+        for word in self.security_blacklist:
+            if word in command:
+                return False, f"命令包含黑名单词汇: {word}"
+
+        # 2. LLM 语义审计
+        if self.enable_llm_audit:
+            try:
+                prompt = (
+                    "作为一名系统安全专家，请评估以下 Shell 命令的安全性。\n"
+                    f"命令: `{command}`\n\n"
+                    "要求：\n"
+                    "1. 如果该命令可能导致系统崩溃、关键数据丢失、敏感信息泄露（如读取 /etc/passwd）或提权，请判定为 UNSAFE。\n"
+                    "2. 如果命令是常规的查询、文件操作或无害的系统管理，请判定为 SAFE。\n"
+                    "3. 仅返回 SAFE 或 UNSAFE，不要有任何额外文字。"
+                )
+                
+                # 获取当前使用的提供商
+                provider = self.context.get_using_provider(umo)
+                response = await provider.text_chat(prompt=prompt)
+                
+                audit_result = response.completion_text.strip().upper()
+                if "UNSAFE" in audit_result:
+                    return False, "LLM 语义审计判定该命令具有潜在风险。"
+                
+            except Exception as e:
+                logger.error(f"LLM 安全审计出错: {e}")
+                # 审计出错时，如果是严格模式，则保守处理
+                if current_level == "strict":
+                    return False, f"安全审计异常且处于严格模式: {e}"
+
+        return True, ""
+
+    async def _execute_command(self, command: str) -> tuple[str, str, int]:
+        """执行 shell 命令的核心方法"""
+        try:
             if self.enable_logging:
                 logger.info(f"在shell中执行命令: {command}")
 
-            # 使用 shell 执行命令
             process = await asyncio.create_subprocess_shell(
                 command,
                 cwd=self.working_directory,
@@ -65,7 +108,6 @@ class ShellExec(Star):
                 stderr=asyncio.subprocess.PIPE
             )
             
-            # 添加超时处理
             try:
                 stdout, stderr = await asyncio.wait_for(
                     process.communicate(),
@@ -76,7 +118,6 @@ class ShellExec(Star):
                 await process.wait()
                 return "", f"命令执行超时（超过 {self.max_execution_time} 秒）", 1
             
-            # 解码输出
             stdout_text = stdout.decode('utf-8', errors='replace').strip()
             stderr_text = stderr.decode('utf-8', errors='replace').strip()
             
@@ -89,253 +130,229 @@ class ShellExec(Star):
     @filter.command("shell")
     @filter.permission_type(filter.PermissionType.ADMIN)
     async def shell_command(self, event: AstrMessageEvent, command: str = ""):
-        """
-        执行 shell 命令的用户命令
-        
-        Args:
-            event: 消息事件
-            command: 要执行的 shell 命令 (由框架注入，可能不完整)
-        """
-        # 框架注入的 command 参数不可靠，我们从原始消息中手动解析
+        """执行 shell 命令的用户命令"""
         message_text = event.message_str.strip()
-        
-        # 找到 /shell 之后的所有内容
         parts = message_text.split(" ", 1)
-        if len(parts) > 1:
-            actual_command = parts[1].strip()
-        else:
-            actual_command = ""
+        actual_command = parts[1].strip() if len(parts) > 1 else ""
 
         if not actual_command:
             yield event.plain_result("请提供要执行的命令。使用方法: /shell <命令>")
             return
+
+        user_id = event.get_sender_id()
         
-        logger.info(f"管理员 {event.get_sender_id()} 请求执行命令: {actual_command}")
+        # 状态检查：如果当前用户已有待确认命令，提示先处理
+        if user_id in self.pending_states:
+            pending = self.pending_states[user_id]
+            if time.time() - pending.timestamp < self.confirmation_timeout:
+                yield event.plain_result(
+                    f"⚠️ 您当前有一个待确认的高危命令（来自 {pending.source}）：\n`{pending.command}`\n\n"
+                    "请先使用 `/shell_allow` 确认执行，或使用 `/shell_deny` 取消。"
+                )
+                return
+            else:
+                del self.pending_states[user_id]
+
+        # --- 安全校验逻辑 (用户级) ---
+        if self.user_security_level != "permissive":
+            is_safe, reason = await self._check_security(actual_command, self.user_security_level, event.unified_msg_origin)
+            if not is_safe:
+                if self.user_security_level == "strict":
+                    yield event.plain_result(f"🚫 命令已被拦截！\n原因: {reason}")
+                    return
+                elif self.user_security_level == "verification":
+                    self.pending_states[user_id] = PendingCommand(
+                        command=actual_command,
+                        timestamp=time.time(),
+                        reason=reason,
+                        source='user'
+                    )
+                    yield event.plain_result(
+                        f"⚠️ 风险预警：该指令可能存在风险！\n原因: {reason}\n\n"
+                        f"待执行指令: `{actual_command}`\n\n"
+                        "若您确定要执行，请输入 `/shell_allow` 进行确认。"
+                    )
+                    return
+
+        # 执行通过审计的命令
+        async for res in self._run_and_yield_result(event, actual_command):
+            yield res
+
+    @filter.command("shell_allow")
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    async def shell_allow_command(self, event: AstrMessageEvent):
+        """确认并执行之前被拦截的高危命令"""
+        user_id = event.get_sender_id()
+        if user_id not in self.pending_states:
+            yield event.plain_result("❌ 当前没有需要确认的命令。")
+            return
         
-        stdout, stderr, return_code = await self._execute_command(actual_command)
+        pending = self.pending_states.pop(user_id)
         
-        # 构建响应消息
+        # 超时检查
+        if time.time() - pending.timestamp > self.confirmation_timeout:
+            yield event.plain_result("⏰ 确认已超时，请重新发起命令。")
+            return
+        
+        logger.info(f"管理员 {user_id} 确认执行由 {pending.source} 发起的命令: {pending.command}")
+        yield event.plain_result(f"✅ 已确认，正在执行: `{pending.command}`")
+        
+        stdout, stderr, return_code = await self._execute_command(pending.command)
+        
+        # 构建执行结果文本
         response_parts = []
+        if stdout: response_parts.append(f"输出:\n```\n{stdout}\n```")
+        if stderr: response_parts.append(f"错误:\n```\n{stderr}\n```")
+        if not stdout and not stderr: response_parts.append("命令执行完成，没有输出。")
+        response_parts.append(f"返回码: {return_code}")
+        result_text = "\n\n".join(response_parts)
         
-        if stdout:
-            response_parts.append(f"输出:\n```\n{stdout}\n```")
+        yield event.plain_result(result_text)
+
+        # 如果命令源自 LLM，则主动通知 LLM 结果
+        if pending.source == 'llm':
+            try:
+                chat_provider_id = await self.context.get_current_chat_provider_id(event.unified_msg_origin)
+                notification_prompt = (
+                    f"管理员已批准执行你之前请求的敏感命令：`{pending.command}`。\n\n"
+                    f"执行结果如下：\n{result_text}\n\n"
+                    "请根据此结果继续你之前的推理或任务。"
+                )
+                await self.context.tool_loop_agent(
+                    event=event,
+                    chat_provider_id=chat_provider_id,
+                    prompt=notification_prompt
+                )
+            except Exception as e:
+                logger.error(f"尝试通知 LLM 失败: {e}")
+
+    @filter.command("shell_deny")
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    async def shell_deny_command(self, event: AstrMessageEvent):
+        """取消当前待确认的高危命令"""
+        user_id = event.get_sender_id()
+        if user_id in self.pending_states:
+            pending = self.pending_states.pop(user_id)
+            yield event.plain_result(f"已取消待执行指令: `{pending.command}`")
+        else:
+            yield event.plain_result("当前没有待确认的命令。")
+
+    async def _run_and_yield_result(self, event: AstrMessageEvent, command: str):
+        """内部工具：执行命令并 yield 格式化结果"""
+        stdout, stderr, return_code = await self._execute_command(command)
         
-        if stderr:
-            response_parts.append(f"错误:\n```\n{stderr}\n```")
-        
-        if not stdout and not stderr:
-            response_parts.append("命令执行完成，没有输出。")
-        
+        response_parts = []
+        if stdout: response_parts.append(f"输出:\n```\n{stdout}\n```")
+        if stderr: response_parts.append(f"错误:\n```\n{stderr}\n```")
+        if not stdout and not stderr: response_parts.append("命令执行完成，没有输出。")
         response_parts.append(f"返回码: {return_code}")
         
-        response = "\n\n".join(response_parts)
-        
-        yield event.plain_result(response)
-    
+        yield event.plain_result("\n\n".join(response_parts))
+
     @filter.llm_tool(name="execute_shell_command")
     async def execute_shell_command(self, event: AstrMessageEvent, command: Optional[str] = None) -> str:
         """
-        执行 shell 命令的 LLM 工具
+        执行 shell 命令的 LLM 工具。该工具仅限管理员通过 LLM 调用。
         
         Args:
             command(string): 要执行的 shell 命令
         """
-        # 权限检查：只有管理员才能通过 LLM 执行 shell 命令
         if event.role != "admin":
-            logger.warning(f"权限不足：用户 {event.get_sender_id()} (角色: {event.role}) 尝试通过 LLM 执行 shell 命令。")
-            return "权限验证失败：用户不是管理员，无权限使用shell命令。请联系管理员获取权限。操作已终止，无需重复尝试。"
+            return "权限验证失败：用户不是管理员。"
+        
+        if not command: return "错误：缺少 command 参数。"
 
-        # 检查是否为框架对用户命令（如 /shell）的误调用
-        if event.message_str.strip().startswith("/"):
-            logger.debug(f"忽略框架对 LLM 工具的误调用，原始消息: {event.message_str.strip()}")
-            return ""
-        
-        if command is None:
-            logger.warning("LLM 工具 'execute_shell_command' 被调用，但缺少必需的 'command' 参数。")
-            return ""
-            
+        user_id = event.get_sender_id()
+
+        # --- 安全校验逻辑 (LLM级) ---
+        if self.llm_security_level != "permissive":
+            is_safe, reason = await self._check_security(command, self.llm_security_level, event.unified_msg_origin)
+            if not is_safe:
+                if self.llm_security_level == "strict":
+                    logger.warning(f"LLM 危险指令被硬拦截: {command}, 原因: {reason}")
+                    await event.send(MessageChain([Plain(f"🛡️ 安全审计拦截了 LLM 生成的指令: `{command}`\n原因: {reason}")]))
+                    return f"命令被安全策略拦截: {reason}"
+                
+                elif self.llm_security_level == "verification":
+                    self.pending_states[user_id] = PendingCommand(
+                        command=command,
+                        timestamp=time.time(),
+                        reason=reason,
+                        source='llm'
+                    )
+                    notice = (
+                        f"🤖 LLM 尝试执行可能存在风险的指令：\n`{command}`\n\n"
+                        f"判定原因: {reason}\n\n"
+                        "⚠️ 该指令已被挂起。若您确认允许 AI 执行此操作，请输入 `/shell_allow`。"
+                    )
+                    await event.send(MessageChain([Plain(notice)]))
+                    return "该指令由于安全判定需要管理员授权。已通知管理员通过 /shell_allow 放行。请告知用户正在等待审批。"
+
         logger.info(f"LLM 请求执行命令: {command}")
-        
         stdout, stderr, return_code = await self._execute_command(command)
         
-        # 构建响应
-        if return_code == 0:
-            response = f"命令执行成功，返回码: {return_code}"
-            if stdout:
-                response += f"\n输出:\n{stdout}"
-            if stderr:
-                response += f"\n标准错误输出 (通常用于状态或诊断信息):\n{stderr}"
-            if not stdout and not stderr:
-                response += "，没有输出。"
-        else:
-            response = f"命令执行失败，返回码: {return_code}"
-            if stderr:
-                response += f"\n错误信息:\n{stderr}"
-            if stdout:
-                response += f"\n输出 (可能相关):\n{stdout}"
-            if not stdout and not stderr:
-                response += "，没有输出。"
-
-        # 将工具执行结果直接发送给用户，提供即时反馈
-        feedback_message = (
-            f"LLM 工具 'execute_shell_command' 执行了命令: `{command}`\n\n"
-            f"执行结果：\n{response}"
-        )
-        await event.send(MessageChain([Plain(feedback_message)]))
-
-        # 将结果返回给 LLM
+        response = f"返回码: {return_code}"
+        if stdout: response += f"\n输出:\n{stdout}"
+        if stderr: response += f"\n错误:\n{stderr}"
+        
+        # 反馈给用户
+        await event.send(MessageChain([Plain(f"LLM 执行了命令: `{command}`\n\n结果：\n{response}")]))
         return response
 
     @filter.command("send_file")
     @filter.permission_type(filter.PermissionType.ADMIN)
     async def send_file_command(self, event: AstrMessageEvent, path: str = ""):
-        """
-        根据路径发送文件的用户命令
-        
-        Args:
-            event: 消息事件
-            path: 要发送的文件路径 (由框架注入，可能不完整)
-        """
+        """根据路径发送文件的用户命令"""
         message_text = event.message_str.strip()
-        
         parts = message_text.split(" ", 1)
-        if len(parts) > 1:
-            actual_path = parts[1].strip()
-        else:
-            actual_path = ""
+        actual_path = parts[1].strip() if len(parts) > 1 else ""
 
         if not actual_path:
-            yield event.plain_result("请提供要发送的文件路径。使用方法: /send_file <路径>")
+            yield event.plain_result("请提供文件路径。")
             return
         
         expanded_path = os.path.expanduser(actual_path)
-
-        if not os.path.exists(expanded_path):
-            yield event.plain_result(f"文件未找到: {expanded_path}")
-            return
-        
-        if not os.path.isfile(expanded_path):
-            yield event.plain_result(f"路径不是一个文件: {expanded_path}")
+        if not os.path.exists(expanded_path) or not os.path.isfile(expanded_path):
+            yield event.plain_result(f"文件不存在或不是文件: {expanded_path}")
             return
 
-        logger.info(f"管理员 {event.get_sender_id()} 请求发送文件: {expanded_path}")
-        
         try:
-            file_component = File(name=os.path.basename(expanded_path), file=expanded_path)
-            yield event.chain_result([file_component])
+            yield event.chain_result([File(name=os.path.basename(expanded_path), file=expanded_path)])
         except Exception as e:
-            logger.error(f"发送文件时出错: {e}")
-            yield event.plain_result(f"发送文件时出错: {e}")
+            yield event.plain_result(f"发送失败: {e}")
 
     @filter.llm_tool(name="send_file_by_path")
     async def send_file_by_path(self, event: AstrMessageEvent, path: Optional[str] = None) -> str:
-        """
-        根据本地路径发送文件的 LLM 工具
-        
-        Args:
-            path(string): 要发送的文件的绝对或相对本地路径
-        """
-        # 权限检查
-        if event.role != "admin":
-            logger.warning(f"权限不足：用户 {event.get_sender_id()} (角色: {event.role}) 尝试通过 LLM 发送文件。")
-            return "权限验证失败：用户不是管理员，无权限发送文件。请联系管理员获取权限。操作已终止，无需重复尝试。"
-
-        feedback_prefix = f"LLM 工具 'send_file_by_path' 尝试发送文件: `{path}`\n\n"
-
-        if path is None:
-            response = "参数错误: 'path' 参数是必需的。"
-            logger.warning("LLM 工具 'send_file_by_path' 被调用，但缺少必需的 'path' 参数。")
-            await event.send(MessageChain([Plain(f"LLM 工具 'send_file_by_path' 被调用，但缺少必需的 'path' 参数。\n\n执行结果：\n{response}")]))
-            return response
+        """发送本地路径文件的 LLM 工具"""
+        if event.role != "admin": return "权限不足。"
+        if not path: return "参数错误。"
 
         expanded_path = os.path.expanduser(path)
-        if not os.path.exists(expanded_path):
-            response = f"文件未找到: {expanded_path}"
-            await event.send(MessageChain([Plain(f"{feedback_prefix}执行结果：\n{response}")]))
-            return response
+        if not os.path.exists(expanded_path): return f"文件未找到: {expanded_path}"
         
-        if not os.path.isfile(expanded_path):
-            response = f"路径不是一个文件: {expanded_path}"
-            await event.send(MessageChain([Plain(f"{feedback_prefix}执行结果：\n{response}")]))
-            return response
-
         try:
-            logger.info(f"LLM 请求发送文件: {expanded_path}")
-            file_component = File(name=os.path.basename(expanded_path), file=expanded_path)
-            await event.send(MessageChain([file_component]))
-            
-            response = f"文件 '{os.path.basename(expanded_path)}' 已成功发送。"
-            # 只需要返回成功信息即可，因为文件已经发送了
-            return response
+            await event.send(MessageChain([File(name=os.path.basename(expanded_path), file=expanded_path)]))
+            return f"文件 {os.path.basename(expanded_path)} 已发送。"
         except Exception as e:
-            response = f"发送文件时出错: {e}"
-            logger.error(f"LLM 工具发送文件时出错: {e}")
-            await event.send(MessageChain([Plain(f"{feedback_prefix}执行结果：\n{response}")]))
-            return response
+            return f"发送失败: {e}"
 
     @filter.llm_tool(name="send_file_by_url")
     async def send_file_by_url(self, event: AstrMessageEvent, url: Optional[str] = None) -> str:
-        """
-        根据 URL 发送文件的 LLM 工具，例如在线图片。
+        """根据 URL 发送文件的 LLM 工具"""
+        if event.role != "admin": return "权限不足。"
+        if not url: return "参数错误。"
 
-        Args:
-            url(string): 要发送的文件的 URL
-        """
-        # 权限检查
-        if event.role != "admin":
-            logger.warning(f"权限不足：用户 {event.get_sender_id()} (角色: {event.role}) 尝试通过 LLM 发送文件。")
-            return "权限验证失败：用户不是管理员，无权限发送文件。请联系管理员获取权限。操作已终止，无需重复尝试。"
-
-        feedback_prefix = f"LLM 工具 'send_file_by_url' 尝试发送文件: `{url}`\n\n"
-
-        if url is None:
-            response = "参数错误: 'url' 参数是必需的。"
-            logger.warning("LLM 工具 'send_file_by_url' 被调用，但缺少必需的 'url' 参数。")
-            await event.send(MessageChain([Plain(f"LLM 工具 'send_file_by_url' 被调用，但缺少必需的 'url' 参数。\n\n执行结果：\n{response}")]))
-            return response
-
-        temp_dir = self.working_directory
-        
-        # 从 URL 中提取文件名，如果无法提取则生成一个
-        try:
-            file_name = os.path.basename(url.split("?")[0])
-            if not file_name:
-                file_name = str(uuid.uuid4())
-        except Exception:
-            file_name = str(uuid.uuid4())
-
-        temp_file_path = os.path.join(temp_dir, file_name)
-
+        temp_file_path = os.path.join(self.working_directory, f"tmp_{uuid.uuid4()}")
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(url) as resp:
-                    if resp.status != 200:
-                        response = f"下载文件失败，HTTP 状态码: {resp.status}"
-                        await event.send(MessageChain([Plain(f"{feedback_prefix}执行结果：\n{response}")]))
-                        return response
-                    
+                    if resp.status != 200: return f"下载失败: {resp.status}"
                     with open(temp_file_path, 'wb') as f:
-                        while True:
-                            chunk = await resp.content.read(1024)
-                            if not chunk:
-                                break
-                            f.write(chunk)
+                        f.write(await resp.read())
 
-            logger.info(f"LLM 请求发送 URL 文件: {url}")
-            file_component = File(name=file_name, file=temp_file_path)
-            await event.send(MessageChain([file_component]))
-            
-            response = f"文件 '{file_name}' 已从 URL 成功发送。"
-            return response
+            await event.send(MessageChain([File(name="downloaded_file", file=temp_file_path)]))
+            return "文件已下载并发送。"
         except Exception as e:
-            response = f"从 URL 发送文件时出错: {e}"
-            logger.error(f"LLM 工具从 URL 发送文件时出错: {e}")
-            await event.send(MessageChain([Plain(f"{feedback_prefix}执行结果：\n{response}")]))
-            return response
+            return f"错误: {e}"
         finally:
-            # 可选：发送后删除临时文件
-            if os.path.exists(temp_file_path):
-                try:
-                    os.remove(temp_file_path)
-                except Exception as e:
-                    logger.warning(f"删除临时文件失败: {temp_file_path}, 错误: {e}")
+            if os.path.exists(temp_file_path): os.remove(temp_file_path)

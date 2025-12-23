@@ -8,7 +8,7 @@
   "enable_logging": {
     "description": "是否启用命令执行日志",
     "type": "bool", 
-    "hint": "是否记录所有执行的命令到日志文件中。",
+    "hint": "是否记录所有执行的命令到日志文件中。。",
     "default": true
   },
   "working_directory": {
@@ -16,5 +16,29 @@
     "type": "string",
     "hint": "所有 shell 命令将在此目录中执行，并且 URL 下载的临时文件也将存储在此处。如果留空，将默认使用插件目录下的 'workdir' 文件夹。",
     "default": ""
+  },
+  "user_security_level": {
+    "description": "用户手动指令安全等级",
+    "type": "string",
+    "hint": "permissive: 直接执行; verification: 风险指令需 /shell_allow 确认; strict: 直接拦截风险指令。",
+    "default": "permissive"
+  },
+  "llm_security_level": {
+    "description": "LLM 自动指令安全等级",
+    "type": "string",
+    "hint": "permissive: 直接执行; verification: 风险指令需由管理员输入 /shell_allow 授权; strict: 直接拦截风险指令。",
+    "default": "verification"
+  },
+  "security_blacklist": {
+    "description": "本地指令黑名单",
+    "type": "list",
+    "hint": "禁止执行的关键词列表。即便关闭 LLM 审计，包含这些词的指令也会被视为危险。",
+    "default": ["rm", "mkfs", "format", "shutdown", "reboot", "chmod 777", "> /dev", "mv /*"]
+  },
+  "enable_llm_audit": {
+    "description": "启用 LLM 安全审计",
+    "type": "bool",
+    "hint": "是否使用 LLM 对指令进行语义安全评估（识别隐晦的危险行为）。",
+    "default": true
   }
 }
