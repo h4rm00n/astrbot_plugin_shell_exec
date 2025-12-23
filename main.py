@@ -317,7 +317,7 @@ class ShellExec(Star):
         yield event.plain_result("\n\n".join(response_parts))
 
     @filter.llm_tool(name="execute_shell_command")
-    async def execute_shell_command(self, event: AstrMessageEvent, command: Optional[str] = None) -> str:
+    async def execute_shell_command(self, event: AstrMessageEvent, command: Optional[str] = None) -> Optional[str]:
         """
         执行 shell 命令的 LLM 工具。该工具仅限管理员通过 LLM 调用。
         
@@ -337,8 +337,12 @@ class ShellExec(Star):
             if not is_safe:
                 if self.llm_security_level == "strict":
                     logger.warning(f"LLM 危险指令被硬拦截: {command}, 原因: {reason}")
-                    await event.send(MessageChain([Plain(f"🛡️ 安全审计拦截了 LLM 生成的指令: `{command}`\n原因: {reason}")]))
-                    return f"命令被安全策略拦截: {reason}"
+                    # 使用 set_result + 返回 None 来终止工具循环并直接发送消息给用户
+                    event.set_result(event.plain_result(
+                        f"🛡️ 安全审计拦截了 LLM 生成的指令: `{command}`\n原因: {reason}\n\n"
+                        "工具链已终止，后续操作不会执行。"
+                    ))
+                    return None  # 返回 None 触发框架终止工具循环
                 
                 elif self.llm_security_level == "verification":
                     self.pending_states[user_id] = PendingCommand(
@@ -351,10 +355,12 @@ class ShellExec(Star):
                     notice = (
                         f"🤖 LLM 尝试执行可能存在风险的指令：\n`{command}`\n\n"
                         f"判定原因: {reason}\n\n"
-                        "⚠️ 该指令已被挂起。若您确认允许 AI 执行此操作，请输入 `/shell_allow`，否则请输入 `/shell_deny`。"
+                        "⚠️ 该指令已被挂起，**工具链已暂停**。\n"
+                        "若您确认允许 AI 执行此操作，请输入 `/shell_allow`，否则请输入 `/shell_deny`。"
                     )
-                    await event.send(MessageChain([Plain(notice)]))
-                    return "该指令由于安全判定需要管理员授权。已通知管理员通过 /shell_allow 放行。请告知用户正在等待审批。"
+                    # 使用 set_result + 返回 None 来终止工具循环并直接发送消息给用户
+                    event.set_result(event.plain_result(notice))
+                    return None  # 返回 None 触发框架终止工具循环，阻塞后续工具调用
 
         logger.info(f"LLM 请求执行命令: {command}")
         stdout, stderr, return_code = await self._execute_command(command)
