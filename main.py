@@ -4,8 +4,8 @@ import shlex
 import re
 import time
 import json
-from typing import Optional, Tuple, Dict
-from dataclasses import dataclass
+from typing import Optional, Tuple, Dict, List
+from dataclasses import dataclass, field
 import aiohttp
 import uuid
 import tempfile
@@ -19,6 +19,18 @@ from astrbot.api.star import Context, register
 from astrbot.api import AstrBotConfig
 from astrbot.api.event import filter
 
+
+class ToolChainInterrupt(BaseException):
+    """
+    自定义异常，用于中断工具链执行。
+    继承自 BaseException 而非 Exception，以穿透框架的 except Exception 捕获。
+    """
+    def __init__(self, message: str, pending_tools: List[str] = None):
+        super().__init__(message)
+        self.message = message
+        self.pending_tools = pending_tools or []
+
+
 @dataclass
 class PendingCommand:
     command: str
@@ -26,6 +38,7 @@ class PendingCommand:
     reason: str
     source: str  # 'user' or 'llm'
     umo: str = ""  # 记录原始会话 ID
+    pending_tool_calls: List[str] = field(default_factory=list)  # 记录被阻塞时尚未执行的工具调用
 
 # @register("shell_exec", "AstrBot", "Shell 命令执行插件", "1.1.0", "https://github.com/h4rm00n/astrbot_plugin_shell_exec")
 class ShellExec(Star):
@@ -337,12 +350,16 @@ class ShellExec(Star):
             if not is_safe:
                 if self.llm_security_level == "strict":
                     logger.warning(f"LLM 危险指令被硬拦截: {command}, 原因: {reason}")
-                    # 使用 set_result + 返回 None 来终止工具循环并直接发送消息给用户
-                    event.set_result(event.plain_result(
+                    # 发送消息给用户
+                    await event.send(MessageChain([Plain(
                         f"🛡️ 安全审计拦截了 LLM 生成的指令: `{command}`\n原因: {reason}\n\n"
-                        "工具链已终止，后续操作不会执行。"
-                    ))
-                    return None  # 返回 None 触发框架终止工具循环
+                        "🚫 工具链已强制终止，后续操作不会执行。"
+                    )]))
+                    # 抛出 BaseException 子类来穿透框架的 except Exception 捕获，中断工具循环
+                    raise ToolChainInterrupt(
+                        f"命令被安全策略拦截: {reason}",
+                        pending_tools=[]
+                    )
                 
                 elif self.llm_security_level == "verification":
                     self.pending_states[user_id] = PendingCommand(
@@ -358,9 +375,13 @@ class ShellExec(Star):
                         "⚠️ 该指令已被挂起，**工具链已暂停**。\n"
                         "若您确认允许 AI 执行此操作，请输入 `/shell_allow`，否则请输入 `/shell_deny`。"
                     )
-                    # 使用 set_result + 返回 None 来终止工具循环并直接发送消息给用户
-                    event.set_result(event.plain_result(notice))
-                    return None  # 返回 None 触发框架终止工具循环，阻塞后续工具调用
+                    # 发送消息给用户
+                    await event.send(MessageChain([Plain(notice)]))
+                    # 抛出 BaseException 子类来穿透框架的 except Exception 捕获，中断工具循环
+                    raise ToolChainInterrupt(
+                        f"命令需要管理员授权: {command}",
+                        pending_tools=[]
+                    )
 
         logger.info(f"LLM 请求执行命令: {command}")
         stdout, stderr, return_code = await self._execute_command(command)
