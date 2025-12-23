@@ -216,13 +216,16 @@ class ShellExec(Star):
                 notification_prompt = (
                     f"管理员已批准执行你之前请求的敏感命令：`{pending.command}`。\n\n"
                     f"执行结果如下：\n{result_text}\n\n"
-                    "请根据此结果继续你之前的推理或任务。"
+                    "请根据此结果继续你之前的推理或任务，并给用户一个回复。"
                 )
-                await self.context.tool_loop_agent(
+                llm_response = await self.context.tool_loop_agent(
                     event=event,
                     chat_provider_id=chat_provider_id,
                     prompt=notification_prompt
                 )
+                # 将 LLM 的回应发送给用户
+                if llm_response and llm_response.completion_text:
+                    await event.send(MessageChain([Plain(llm_response.completion_text)]))
             except Exception as e:
                 logger.error(f"尝试通知 LLM 失败: {e}")
 
@@ -234,6 +237,24 @@ class ShellExec(Star):
         if user_id in self.pending_states:
             pending = self.pending_states.pop(user_id)
             yield event.plain_result(f"已取消待执行指令: `{pending.command}`")
+            
+            # 如果是 LLM 命令，通知 LLM 被拒绝了
+            if pending.source == 'llm':
+                try:
+                    chat_provider_id = await self.context.get_current_chat_provider_id(event.unified_msg_origin)
+                    notification_prompt = (
+                        f"管理员**拒绝**了你之前请求的敏感命令：`{pending.command}`。\n\n"
+                        "请知晓此情况，并向用户解释该操作由于安全策略被管理员拦截。"
+                    )
+                    llm_response = await self.context.tool_loop_agent(
+                        event=event,
+                        chat_provider_id=chat_provider_id,
+                        prompt=notification_prompt
+                    )
+                    if llm_response and llm_response.completion_text:
+                        await event.send(MessageChain([Plain(llm_response.completion_text)]))
+                except Exception as e:
+                    logger.error(f"尝试通知 LLM 失败: {e}")
         else:
             yield event.plain_result("当前没有待确认的命令。")
 
@@ -283,7 +304,7 @@ class ShellExec(Star):
                     notice = (
                         f"🤖 LLM 尝试执行可能存在风险的指令：\n`{command}`\n\n"
                         f"判定原因: {reason}\n\n"
-                        "⚠️ 该指令已被挂起。若您确认允许 AI 执行此操作，请输入 `/shell_allow`。"
+                        "⚠️ 该指令已被挂起。若您确认允许 AI 执行此操作，请输入 `/shell_allow`，否则请输入 `/shell_deny`。"
                     )
                     await event.send(MessageChain([Plain(notice)]))
                     return "该指令由于安全判定需要管理员授权。已通知管理员通过 /shell_allow 放行。请告知用户正在等待审批。"
