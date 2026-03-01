@@ -331,9 +331,8 @@ class ShellExec(Star):
 
     @filter.llm_tool(name="execute_shell_command")
     async def execute_shell_command(self, event: AstrMessageEvent, command: Optional[str] = None) -> Optional[str]:
-        """
-        执行 shell 命令的 LLM 工具。该工具仅限管理员通过 LLM 调用。
-        
+        """执行 shell 命令的 LLM 工具。该工具仅限管理员通过 LLM 调用。
+
         Args:
             command(string): 要执行的 shell 命令
         """
@@ -418,9 +417,8 @@ class ShellExec(Star):
 
     @filter.llm_tool(name="send_file_by_path")
     async def send_file_by_path(self, event: AstrMessageEvent, path: Optional[str] = None) -> str:
-        """
-        发送本地路径文件的 LLM 工具。
-        
+        """发送本地路径文件的 LLM 工具。
+
         Args:
             path(string): 要发送的文件的本地路径
         """
@@ -438,9 +436,8 @@ class ShellExec(Star):
 
     @filter.llm_tool(name="send_file_by_url")
     async def send_file_by_url(self, event: AstrMessageEvent, url: Optional[str] = None) -> str:
-        """
-        根据 URL 发送文件的 LLM 工具。
-        
+        """根据 URL 发送文件的 LLM 工具。
+
         Args:
             url(string): 要下载并发送的文件的 URL 地址
         """
