@@ -11,6 +11,12 @@
     "hint": "是否记录所有执行的命令到日志文件中。。",
     "default": true
   },
+  "return_result_to_user": {
+    "description": "是否将命令执行结果通过消息返回给用户",
+    "type": "bool",
+    "hint": "禁用此选项时，命令仍会执行但不会将结果返回给用户。",
+    "default": true
+  },
   "working_directory": {
     "description": "插件的工作目录",
     "type": "string",

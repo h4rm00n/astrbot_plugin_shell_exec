@@ -58,6 +58,9 @@ class ShellExec(Star):
         self.security_blacklist = config.get("security_blacklist", ["rm", "mkfs", "format", "shutdown", "reboot", "chmod 777", "> /dev", "mv /*"])
         self.enable_llm_audit = config.get("enable_llm_audit", True)
         
+        # 是否将命令执行结果返回给用户
+        self.return_result_to_user = config.get("return_result_to_user", True)
+        
         # 待确认命令缓存 {user_id: PendingCommand}
         self.pending_states: Dict[str, PendingCommand] = {}
         # 确认有效期（秒），超时后自动失效
@@ -389,8 +392,11 @@ class ShellExec(Star):
         if stdout: response += f"\n输出:\n{stdout}"
         if stderr: response += f"\n错误:\n{stderr}"
         
-        # 反馈给用户
-        await event.send(MessageChain([Plain(f"LLM 执行了命令: `{command}`\n\n结果：\n{response}")]))
+        # 如果配置为不返回结果给用户，则不发送消息
+        if self.return_result_to_user:
+            # 反馈给用户
+            await event.send(MessageChain([Plain(f"LLM 执行了命令: `{command}`\n\n结果：\n{response}")]))
+
         return response
 
     @filter.command("send_file")

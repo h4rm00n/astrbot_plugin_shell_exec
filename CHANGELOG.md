@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- Add `return_result_to_user` config option to control whether command execution results are returned to user via messages
+
 ### Documentation
 - Add parameter details to tool docstrings for better clarity
 
